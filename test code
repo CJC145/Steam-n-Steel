@@ -1,0 +1,1100 @@
+import pygame
+import math
+import time
+
+# --- Speed Gauge Class ---
+class SpeedGauge:
+    def __init__(self, x, y, scale=1.0, max_speed=100):
+        self.x, self.y, self.scale = x, y, scale
+        self.max_speed = max_speed
+        self.angle_min, self.angle_max = 150, 390
+        self.speed = 0
+        self.color_bg = (207, 197, 157)
+        self.color_border_outer = (89, 86, 74)
+        self.color_border_inner = (46, 44, 38)
+        self.color_text = (79, 76, 66)
+        self.color_needle = (255, 0, 0)
+        self.recalculate_scale(self.x, self.y, self.scale)
+
+    def recalculate_scale(self, x, y, scale):
+        self.x, self.y, self.scale = x, y, scale
+        self.radius = 250 * self.scale
+        self.font = pygame.font.SysFont(None, int(40 * self.scale))
+        self.big_font = pygame.font.SysFont(None, int(60 * self.scale))
+
+    def _get_coords(self, angle_deg, distance):
+        angle_rad = math.radians(angle_deg)
+        return (self.x + math.cos(angle_rad) * (distance * self.scale),
+                self.y + math.sin(angle_rad) * (distance * self.scale))
+
+    def _lerp_angle(self, speed):
+        return self.angle_min + (speed / self.max_speed) * (self.angle_max - self.angle_min)
+
+    def update(self, current_speed):
+        self.speed = max(0, min(current_speed, self.max_speed))
+
+    def draw(self, surface):
+        pygame.draw.circle(surface, self.color_bg, (self.x, self.y), self.radius)
+        pygame.draw.circle(surface, self.color_border_outer, (self.x, self.y), self.radius, max(1, int(8 * self.scale)))
+        pygame.draw.circle(surface, self.color_border_inner, (self.x, self.y), self.radius, max(1, int(10 * self.scale)))
+
+        for s in range(0, self.max_speed + 1, 10):
+            angle = self._lerp_angle(s)
+            p1, p2 = self._get_coords(angle, 210), self._get_coords(angle, 240)
+            pygame.draw.line(surface, self.color_text, p1, p2, max(1, int(4 * self.scale)))
+            lx, ly = self._get_coords(angle, 180)
+            label = (
+                self.big_font.render(str(s), True, self.color_text)
+                if s in (20, 40, 60, 80, 100)
+                else self.font.render(str(s), True, self.color_text)
+            )
+            surface.blit(label, label.get_rect(center=(lx, ly)))
+
+        needle_angle = self._lerp_angle(self.speed)
+        tip = self._get_coords(needle_angle, 220)
+        pygame.draw.line(surface, self.color_needle, (self.x, self.y), tip, max(1, int(6 * self.scale)))
+        pygame.draw.circle(surface, self.color_needle, (self.x, self.y), max(1, int(12 * self.scale)))
+
+
+# --- Boiler Pressure Gauge Class ---
+
+class BoilerPressureGauge:
+    def __init__(self, x, y, scale=1.0, max_pressure=320):
+        self.x, self.y, self.scale = x, y, scale
+        self.max_pressure = max_pressure
+        self.angle_min, self.angle_max = 150, 390
+        self.pressure = 0
+        
+        # Brass/Bronze aesthetic colors
+        self.color_bg = (220, 215, 190)
+        self.color_border_outer = (184, 134, 11)  # Dark Goldenrod / Brass
+        self.color_border_inner = (139, 101, 8)   
+        self.color_text = (50, 50, 40)
+        self.color_needle = (30, 30, 30)
+        self.color_redline = (200, 40, 40)
+        
+        self.recalculate_scale(self.x, self.y, self.scale)
+
+    def recalculate_scale(self, x, y, scale):
+        self.x, self.y, self.scale = x, y, scale
+        self.radius = 200 * self.scale
+        self.font = pygame.font.SysFont(None, int(30 * self.scale))
+        self.big_font = pygame.font.SysFont(None, int(45 * self.scale))
+
+    def _get_coords(self, angle_deg, distance):
+        angle_rad = math.radians(angle_deg)
+        return (self.x + math.cos(angle_rad) * (distance * self.scale),
+                self.y + math.sin(angle_rad) * (distance * self.scale))
+
+    def _lerp_angle(self, pressure):
+        # Your provided linear interpolation formula
+        return self.angle_min + (pressure / self.max_pressure) * (self.angle_max - self.angle_min)
+
+    def update(self, current_pressure):
+        self.pressure = max(0, min(current_pressure, self.max_pressure))
+
+    def draw(self, surface):
+        pygame.draw.circle(surface, self.color_bg, (self.x, self.y), self.radius)
+        pygame.draw.circle(surface, self.color_border_outer, (self.x, self.y), self.radius, max(1, int(12 * self.scale)))
+        pygame.draw.circle(surface, self.color_border_inner, (self.x, self.y), self.radius - int(12 * self.scale), max(1, int(4 * self.scale)))
+        
+        # Draw PSI Label
+        psi_label = self.font.render("PSI", True, self.color_text)
+        surface.blit(psi_label, psi_label.get_rect(center=(self.x, self.y + (60 * self.scale))))
+
+        # Draw the Red Line area (200 to 240)
+        rect = pygame.Rect(self.x - self.radius + int(20*self.scale), self.y - self.radius + int(20*self.scale), 
+                           (self.radius*2) - int(40*self.scale), (self.radius*2) - int(40*self.scale))
+        start_rad = math.radians(360 - self._lerp_angle(240)) # Pygame arcs draw counter-clockwise
+        end_rad = math.radians(360 - self._lerp_angle(200))
+        pygame.draw.arc(surface, self.color_redline, rect, start_rad, end_rad, int(15 * self.scale))
+
+        for p in range(0, self.max_pressure + 1, 20):
+            angle = self._lerp_angle(p)
+            tick_len = 170 if p % 40 == 0 else 180
+            p1, p2 = self._get_coords(angle, tick_len), self._get_coords(angle, 190)
+            pygame.draw.line(surface, self.color_text, p1, p2, max(1, int(3 * self.scale)))
+            
+            if p % 40 == 0:
+                lx, ly = self._get_coords(angle, 145)
+                label = self.big_font.render(str(p), True, self.color_text)
+                surface.blit(label, label.get_rect(center=(lx, ly)))
+        
+        needle_angle = self._lerp_angle(self.pressure)
+        tip = self._get_coords(needle_angle, 185)
+        tail = self._get_coords(needle_angle + 180, 40) # Counter-weight on needle
+        pygame.draw.line(surface, self.color_needle, tail, tip, max(1, int(6 * self.scale)))
+        pygame.draw.circle(surface, self.color_needle, (self.x, self.y), max(1, int(15 * self.scale)))
+
+
+# --- Firebox Class ---
+# --- Firebox Class ---
+import pygame
+import math
+from typing import Optional, Tuple, List
+
+class Firebox:
+    """
+    Firebox model with:
+    - Paper + kindling fire-lighting system
+    - Match equip/unequip and click-to-ignite
+    - Realistic ignition checks (door open + paper + kindling)
+    - Coal blocking until fire is lit
+    - Popup UI with close button
+    - Normalized combustion efficiency model
+    - Overpack airflow blocking
+    - Smoke colour and intensity based on combustion completeness
+    - Heat transfer to boiler
+    - Clamshell doors with horizontal lever mechanism
+    """
+
+    DEBUG_FIREBOX: bool = False
+
+    # Ambient / ignition
+    AMBIENT_TEMP = 20.0
+    IGNITION_TEMP = 300.0
+
+    # Combustion & heat transfer
+    k_combustion = 500.0
+    fire_heat_capacity = 2000.0
+    fire_cooling_rate = 5.0
+    k_heat_transfer = 50.0
+    boiler_water_heat_capacity = 4.18e6
+
+    # Efficiency bounds
+    MIN_EFFICIENCY = 0.05
+    MAX_EFFICIENCY = 0.80
+
+    # Overpack
+    OPTIMAL_COAL = 100.0
+    OVERPACK_THRESHOLD = 150.0
+    MAX_COAL = 300.0
+    AIRFLOW_MIN_FACTOR = 0.1
+
+    # Smoke
+    SMOKE_SCALE = 1.0
+    LIGHT_GREY: Tuple[int, int, int] = (200, 200, 200)
+    DARK_GREY: Tuple[int, int, int] = (40, 40, 40)
+
+
+    # Composite weights
+    W_DRAFT = 0.5
+    W_SIZE = 0.2
+    W_TEMP = 0.3
+
+    # Small-fire (paper/kindling) constants
+    PAPER_INITIAL = 1.0
+    KINDLING_INITIAL = 2.0
+    PAPER_POWER = 1500.0
+    KINDLING_POWER = 2500.0
+    PAPER_BURN_RATE = 0.6
+    KINDLING_BURN_RATE = 0.25
+
+    # Notification timing
+    NOTIFICATION_DURATION = 2.0
+
+    def __init__(self, x: int, y: int, scale: float = 1.0) -> None:
+        self.x, self.y, self.scale = int(x), int(y), float(scale)
+
+        # Fire-lighting state
+        self.fire_state: str = "dead"
+        self.has_paper: bool = False
+        self.has_kindling: bool = False
+        self.paper_mass: float = 0.0
+        self.kindling_mass: float = 0.0
+
+        # Match system
+        self.match_equipped: bool = False
+        self.notification_text: str = ""
+        self.notification_timer: float = 0.0
+        self.persistent_notifications: List[str] = []
+
+        # Popup
+        self.popup_active: bool = False
+        self.popup_rect = pygame.Rect(400, 200, 350, 120)
+        self.popup_close_rect = pygame.Rect(
+            self.popup_rect.left + 10, self.popup_rect.top + 10, 20, 20
+        )
+
+        # Door/draft Lever Mechanics
+        self.door_open_ratio: float = 0.5
+        self.dragging_lever: bool = False
+
+        # Coal
+        self.coal_mass: float = 0.0
+        self.fuel_amount: float = self.coal_mass
+        self.burn_rate: float = 0.5
+
+        # Status
+        self.current_efficiency: float = self.MIN_EFFICIENCY
+        self.smoke_intensity: float = 0.0
+        self.smoke_colour: Optional[Tuple[int, int, int]] = None
+        self.black_smoke: bool = False
+
+        # Fire temperature
+        self.fire_temp: float = float(self.AMBIENT_TEMP)
+        self.sparks = []
+
+        # UI
+        self.recalculate_scale(self.x, self.y, self.scale)
+
+        # Boiler
+        self.boiler = Boiler(ambient_temp=self.AMBIENT_TEMP)
+
+    # ------------------------------------------------------------
+    # UI layout & Geometry Updates
+    # ------------------------------------------------------------
+    def recalculate_scale(self, x: int, y: int, scale: float) -> None:
+        self.x, self.y, self.scale = int(x), int(y), float(scale)
+        self.width, self.height = int(350 * self.scale), int(350 * self.scale)
+        self.font = pygame.font.SysFont(None, max(12, int(24 * self.scale)))
+
+        self.box_rect = pygame.Rect(
+            self.x - self.width // 2,
+            self.y - self.height // 2,
+            self.width,
+            self.height,
+        )
+
+        # Circular opening logic
+        self.opening_radius = int(80 * self.scale)
+        self.opening_center = (self.x, self.y - int(30 * self.scale))
+        
+        # Keep opening_rect for click-detection (igniting with match)
+        self.opening_rect = pygame.Rect(
+            self.opening_center[0] - self.opening_radius,
+            self.opening_center[1] - self.opening_radius,
+            self.opening_radius * 2,
+            self.opening_radius * 2
+        )
+
+        # Lever track geometry
+        self.lever_track_width = int(180 * self.scale)
+        self.lever_track_x = self.x - self.lever_track_width // 2
+        self.lever_y = self.opening_center[1] + self.opening_radius + int(50 * self.scale)
+
+    def _update_geometry(self) -> None:
+        """Updates the dynamically moving parts: lever and doors."""
+        # Lever Position (Left = Open = 1.0, Right = Closed = 0.0)
+        lever_pos_x = self.lever_track_x + int((1.0 - self.door_open_ratio) * self.lever_track_width)
+        
+        self.lever_rect = pygame.Rect(
+            lever_pos_x - int(15 * self.scale),
+            self.lever_y - int(15 * self.scale),
+            int(30 * self.scale),
+            int(30 * self.scale)
+        )
+
+        # Door calculations
+        offset = int(self.door_open_ratio * self.opening_radius)
+        
+        self.left_door_rect = pygame.Rect(
+            self.opening_center[0] - self.opening_radius - offset,
+            self.opening_center[1] - self.opening_radius - int(5 * self.scale),
+            self.opening_radius,
+            (self.opening_radius * 2) + int(10 * self.scale)
+        )
+        
+        self.right_door_rect = pygame.Rect(
+            self.opening_center[0] + offset,
+            self.opening_center[1] - self.opening_radius - int(5 * self.scale),
+            self.opening_radius,
+            (self.opening_radius * 2) + int(10 * self.scale)
+        )
+
+    # ------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------
+    @staticmethod
+    def _lerp_color(
+        c1: Tuple[int, int, int], c2: Tuple[int, int, int], t: float
+    ) -> Tuple[int, int, int]:
+        """Linear interpolation between two RGB colours."""
+        t = max(0.0, min(1.0, t))
+        return (
+            int(c1[0] + (c2[0] - c1[0]) * t),
+            int(c1[1] + (c2[1] - c1[1]) * t),
+            int(c1[2] + (c2[2] - c1[2]) * t),
+        )
+
+    # ------------------------------------------------------------
+    # Notifications
+    # ------------------------------------------------------------
+    def _notify(self, text: str, persistent: bool = False) -> None:
+        if persistent:
+            if text not in self.persistent_notifications:
+                self.persistent_notifications.append(text)
+        else:
+            self.notification_text = text
+            self.notification_timer = self.NOTIFICATION_DURATION
+
+    # ------------------------------------------------------------
+    # Ignition logic
+    # ------------------------------------------------------------
+    def can_ignite(self) -> bool:
+        door_open = self.door_open_ratio > 0.2
+        return door_open and self.has_paper and self.has_kindling
+
+    def _handle_failed_ignite_notification(self) -> None:
+        door_open = self.door_open_ratio > 0.2
+        missing_paper = not self.has_paper
+        missing_kindling = not self.has_kindling
+
+        if not door_open:
+            msg = "Open the firebox doors to light the fire."
+        elif missing_paper and missing_kindling:
+            msg = "You need paper AND kindling to light the fire."
+        elif missing_paper:
+            msg = "You need paper to light the fire."
+        elif missing_kindling:
+            msg = "You need kindling to light the fire."
+        else:
+            msg = "Cannot light the fire right now."
+
+        self._notify(msg, persistent=False)
+
+    # ------------------------------------------------------------
+    # Inputs & Event Handling
+    # ------------------------------------------------------------
+    def handle_event(self, event: pygame.event.Event) -> None:
+        self._update_geometry()
+
+        # Popup close
+        if self.popup_active and event.type == pygame.MOUSEBUTTONDOWN:
+            if self.popup_close_rect.collidepoint(event.pos):
+                self.popup_active = False
+                return
+
+        # Match equip/unequip
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_l:
+            if not self.match_equipped:
+                self.match_equipped = True
+                self._notify("Match equipped", persistent=False)
+            else:
+                self.match_equipped = False
+                self._notify("Match unequipped", persistent=False)
+            return
+
+        # Paper
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_p:
+            if self.fire_state == "dead":
+                self.has_paper = True
+                self.paper_mass = self.PAPER_INITIAL
+                self.fire_state = "needs_kindling"
+                self._notify("Paper added", persistent=True)
+            return
+
+        # Kindling
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_k:
+            if self.fire_state == "needs_kindling":
+                self.has_kindling = True
+                self.kindling_mass = self.KINDLING_INITIAL
+                self.fire_state = "ready_to_light"
+                self._notify("Kindling added", persistent=True)
+            return
+
+        # Clicking to ignite with match
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            if self.match_equipped and self.fire_state in ("ready_to_light", "dead", "needs_kindling"):
+                if self.opening_rect.collidepoint(event.pos):
+                    if self.can_ignite():
+                        self.fire_temp = self.IGNITION_TEMP * 0.5
+                        self.fire_state = "lit"
+                        self.match_equipped = False
+                        self._notify("Fire lit", persistent=False)
+                        self.persistent_notifications.clear()
+                    else:
+                        self._handle_failed_ignite_notification()
+                    return
+
+        # Lever dragging (Left/Right)
+        if event.type == pygame.MOUSEBUTTONDOWN and self.lever_rect.collidepoint(event.pos):
+            self.dragging_lever = True
+        elif event.type == pygame.MOUSEBUTTONUP:
+            self.dragging_lever = False
+        elif event.type == pygame.MOUSEMOTION and self.dragging_lever:
+            mouse_x = event.pos[0]
+            # Lever Left (0) = Open (1.0) | Lever Right (Width) = Closed (0.0)
+            ratio_from_left = (mouse_x - self.lever_track_x) / max(1, self.lever_track_width)
+            self.door_open_ratio = max(0.0, min(1.0, 1.0 - ratio_from_left))
+
+    # ------------------------------------------------------------
+    # Coal addition
+    # ------------------------------------------------------------
+    def add_coal(self, amount: float) -> None:
+        if self.fire_state != "lit":
+            self.popup_active = True
+            return
+
+        if amount > 0 and self.door_open_ratio > 0.1:
+            self.coal_mass = min(self.MAX_COAL, self.coal_mass + amount)
+            self.fuel_amount = self.coal_mass
+
+    # ------------------------------------------------------------
+    # Efficiency helpers
+    # ------------------------------------------------------------
+    def _compute_overpack_norm(self) -> float:
+        if self.coal_mass <= self.OVERPACK_THRESHOLD:
+            return 0.0
+        excess = min(
+            self.coal_mass - self.OVERPACK_THRESHOLD,
+            self.MAX_COAL - self.OVERPACK_THRESHOLD,
+        )
+        return max(0.0, min(1.0, excess / (self.MAX_COAL - self.OVERPACK_THRESHOLD)))
+
+    def _compute_airflow_block_factor(self, overpack_norm: float) -> float:
+        return max(
+            self.AIRFLOW_MIN_FACTOR,
+            1.0 - overpack_norm * (1.0 - self.AIRFLOW_MIN_FACTOR),
+        )
+    
+    # ------------------------------------------------------------
+    # Update
+    # ------------------------------------------------------------
+    def update(self, dt: float, steam_draw: float = 0.0) -> None:
+        if dt <= 0:
+            return
+
+        if self.notification_timer > 0:
+            self.notification_timer -= dt
+
+        fire_lit = self.fire_temp >= self.IGNITION_TEMP or self.fire_state == "lit"
+
+        # ---------------- Draft & size ----------------
+        d = max(0.0, min(1.0, self.door_open_ratio))
+        size_norm = max(0.0, min(1.0, self.coal_mass / max(1.0, self.OPTIMAL_COAL)))
+
+        overpack_norm = self._compute_overpack_norm()
+        airflow_block_factor = self._compute_airflow_block_factor(overpack_norm)
+
+        # Size-dependent optimal door opening
+        optimal_shift = 0.2 + 0.6 * size_norm
+        draft_effectiveness = 1.0 - abs(d - optimal_shift) * 2.0
+        draft_effectiveness = max(0.0, draft_effectiveness)
+
+        effective_draft = draft_effectiveness * airflow_block_factor
+
+        # ---------------- Temperature term for efficiency ----------------
+        if self.fire_temp >= self.IGNITION_TEMP:
+            temp_norm = 1.0
+        else:
+            temp_norm = max(0.0, (self.fire_temp / self.IGNITION_TEMP) * 0.5)
+
+        # ---------------- Efficiency ----------------
+        if fire_lit:
+            composite = (
+                self.W_DRAFT * effective_draft
+                + self.W_SIZE * size_norm
+                + self.W_TEMP * temp_norm
+            )
+            composite = max(0.0, min(1.0, composite))
+            efficiency = self.MIN_EFFICIENCY + composite * (self.MAX_EFFICIENCY - self.MIN_EFFICIENCY)
+            efficiency *= (1.0 - 0.5 * overpack_norm)
+            efficiency = max(self.MIN_EFFICIENCY, min(self.MAX_EFFICIENCY, efficiency))
+        else:
+            efficiency = self.MIN_EFFICIENCY
+
+        self.current_efficiency = efficiency
+
+        # ---------------- Small fire (paper + kindling) ----------------
+        small_fire_power = 0.0
+        if self.fire_state in ("ready_to_light", "lit"):
+            if self.paper_mass > 0:
+                small_fire_power += self.PAPER_POWER * (self.paper_mass / self.PAPER_INITIAL)
+                self.paper_mass = max(0.0, self.paper_mass - self.PAPER_BURN_RATE * dt)
+            if self.kindling_mass > 0:
+                small_fire_power += self.KINDLING_POWER * (self.kindling_mass / self.KINDLING_INITIAL)
+                self.kindling_mass = max(0.0, self.kindling_mass - self.KINDLING_BURN_RATE * dt)
+
+        # ---------------- Main combustion power ----------------
+        combustion_power = self.k_combustion * self.coal_mass * effective_draft * efficiency
+        total_power_kW = combustion_power + small_fire_power  # treat as kW
+
+        # ---------------- Fire temperature (capped, realistic) ----------------
+        FIRE_MAX_TEMP = 1370.0  # °C
+
+        # Heat gain from combustion (kJ)
+        Q_fire_in = total_power_kW * dt
+        heat_gain = Q_fire_in / self.fire_heat_capacity
+
+        # Diminishing returns as we approach max temp
+        diminish = 1.0 - (self.fire_temp / FIRE_MAX_TEMP)
+        diminish = max(0.0, diminish)
+        heat_gain *= diminish
+
+        # Base cooling (radiation, leakage)
+        base_cooling = self.fire_cooling_rate * dt
+
+        # Apply base heating/cooling first
+        self.fire_temp += heat_gain
+        self.fire_temp -= base_cooling
+
+        # ---------------- Coupling to boiler ----------------
+        # Heat transferred from fire to boiler (kW)
+        # Only if fire is hotter than boiler
+        delta_T_fb = self.fire_temp - self.boiler.temperature
+        heat_to_boiler_kW = 0.0
+        if delta_T_fb > 0.0:
+            heat_to_boiler_kW = self.k_heat_transfer * delta_T_fb
+
+            # Remove that energy from the fire
+            Q_to_boiler_kJ = heat_to_boiler_kW * dt
+            self.fire_temp -= Q_to_boiler_kJ / self.fire_heat_capacity
+
+            # Give it to the boiler (steam_draw is kg/s)
+            self.boiler.update(dt, heat_to_boiler_kW, steam_draw_kg_s=steam_draw)
+
+        # Clamp fire temperature
+        self.fire_temp = max(self.AMBIENT_TEMP, min(self.fire_temp, FIRE_MAX_TEMP))
+
+        # Re-evaluate fire_lit after temp update
+        fire_lit = self.fire_temp >= self.IGNITION_TEMP or self.fire_state == "lit"
+
+        # ---------------- Smoke model ----------------
+        if fire_lit:
+            complete = 0.0
+            if self.MAX_EFFICIENCY > 0:
+                complete = max(0.0, min(1.0, self.current_efficiency / self.MAX_EFFICIENCY))
+            self.smoke_intensity = max(0.0, min(1.0, 1.0 - complete)) * self.SMOKE_SCALE
+            self.smoke_colour = self._lerp_color(self.DARK_GREY, self.LIGHT_GREY, complete)
+        else:
+            self.smoke_intensity = 0.0
+            self.smoke_colour = None
+
+        self.black_smoke = self.smoke_intensity > 0.7
+
+        # ---------------- Coal burn-down ----------------
+        if self.coal_mass > 0:
+            burned = min(self.coal_mass, self.burn_rate * dt)
+            self.coal_mass -= burned
+            self.fuel_amount = self.coal_mass
+
+        # ---------------- Fire state transitions ----------------
+        if self.fire_state == "lit":
+            if (
+                self.coal_mass <= 0
+                and self.paper_mass <= 0
+                and self.kindling_mass <= 0
+                and self.fire_temp <= self.AMBIENT_TEMP + 0.5
+            ):
+                self.fire_state = "dead"
+                self.has_paper = False
+                self.has_kindling = False
+                
+    # ------------------------------------------------------------
+    # Draw
+    # ------------------------------------------------------------
+    def draw(self, surface: pygame.Surface) -> None:
+        self._update_geometry()
+
+        # ------------------------------------------------------------
+        # 0. Update sparks (simple particle system)
+        # ------------------------------------------------------------
+        # Spawn sparks only when fire is lit
+        if self.fire_temp > self.IGNITION_TEMP:
+            import random
+            if random.random() < 0.15:  # spawn probability
+                angle = random.uniform(0, 2 * math.pi)
+                r = random.uniform(0, self.opening_radius * 0.4)
+                x = self.opening_center[0] + math.cos(angle) * r
+                y = self.opening_center[1] + math.sin(angle) * r
+                # spark: [x, y, vx, vy, life]
+                self.sparks.append([x, y,
+                                    random.uniform(-0.3, 0.3),
+                                    -random.uniform(0.5, 1.2),
+                                    1.0])
+
+        # Update spark positions
+        for s in self.sparks[:]:
+            s[0] += s[2]
+            s[1] += s[3]
+            s[4] -= 0.03  # fade speed
+            if s[4] <= 0:
+                self.sparks.remove(s)
+
+        # ------------------------------------------------------------
+        # 1. Main Firebox Background
+        # ------------------------------------------------------------
+        pygame.draw.rect(surface, (45, 45, 50), self.box_rect)
+
+        # ------------------------------------------------------------
+        # 2. Firebed Background (Dark circular hole)
+        # ------------------------------------------------------------
+        pygame.draw.circle(surface, (10, 10, 10), self.opening_center, self.opening_radius)
+
+        # ------------------------------------------------------------
+        # 3. Fuel Visual (Rendered inside the hole)
+        # ------------------------------------------------------------
+        if self.coal_mass > 0:
+            f_h = int((self.coal_mass / self.MAX_COAL) * (self.opening_radius * 2))
+
+            # Temperature-based fire colour (600–1300°C)
+            def fire_colour_from_temp(temp: float):
+                t = (temp - 600) / 700
+                t = max(0.0, min(1.0, t))
+
+                gradient = [
+                    (80, 0, 0),        # deep red
+                    (160, 30, 0),      # red-orange
+                    (230, 90, 0),      # bright orange
+                    (255, 170, 40),    # orange-yellow
+                    (255, 240, 180),   # yellow-white
+                ]
+
+                idx = int(t * (len(gradient) - 1))
+                frac = (t * (len(gradient) - 1)) - idx
+
+                c1 = gradient[idx]
+                c2 = gradient[min(idx + 1, len(gradient) - 1)]
+
+                return (
+                    int(c1[0] + (c2[0] - c1[0]) * frac),
+                    int(c1[1] + (c2[1] - c1[1]) * frac),
+                    int(c1[2] + (c2[2] - c1[2]) * frac),
+                )
+
+            color = fire_colour_from_temp(self.fire_temp)
+
+            fuel_rect = pygame.Rect(
+                self.opening_center[0] - self.opening_radius,
+                self.opening_center[1] + self.opening_radius - f_h,
+                self.opening_radius * 2,
+                f_h
+            )
+            pygame.draw.rect(surface, color, fuel_rect)
+
+            # --------------------------------------------------------
+            # 3b. Draw sparks inside the firebox
+            # --------------------------------------------------------
+            for x, y, _, _, life in self.sparks:
+                alpha = int(255 * life)
+                spark_color = (255, 220, 120)
+                pygame.draw.circle(surface, spark_color, (int(x), int(y)), int(3 * self.scale))
+
+        # ------------------------------------------------------------
+        # 4. Circular Masking Ring (Hides corners of the rectangular fuel)
+        # ------------------------------------------------------------
+        mask_thick = int(40 * self.scale)
+        pygame.draw.circle(surface, (45, 45, 50), self.opening_center,
+                        self.opening_radius + mask_thick, mask_thick)
+        pygame.draw.circle(surface, (20, 20, 20), self.opening_center,
+                        self.opening_radius, int(4 * self.scale))  # Inner Rim
+
+        # ------------------------------------------------------------
+        # 5. Firebox Side Plates
+        # ------------------------------------------------------------
+        side_plate_w = int(40 * self.scale)
+        lp_rect = pygame.Rect(self.opening_center[0] - self.opening_radius - side_plate_w,
+                            self.opening_center[1] - self.opening_radius,
+                            side_plate_w, self.opening_radius * 2)
+        rp_rect = pygame.Rect(self.opening_center[0] + self.opening_radius,
+                            self.opening_center[1] - self.opening_radius,
+                            side_plate_w, self.opening_radius * 2)
+        pygame.draw.rect(surface, (35, 35, 35), lp_rect)
+        pygame.draw.rect(surface, (35, 35, 35), rp_rect)
+
+        # ------------------------------------------------------------
+        # 6. Clamshell Doors
+        # ------------------------------------------------------------
+        pygame.draw.rect(surface, (60, 55, 55), self.left_door_rect)
+        pygame.draw.rect(surface, (60, 55, 55), self.right_door_rect)
+        pygame.draw.rect(surface, (30, 30, 30), self.left_door_rect, int(2 * self.scale))
+        pygame.draw.rect(surface, (30, 30, 30), self.right_door_rect, int(2 * self.scale))
+
+        # ------------------------------------------------------------
+        # 7. Lever Mechanism & Linkages
+        # ------------------------------------------------------------
+        pygame.draw.line(surface, (10, 10, 10),
+                        (self.lever_track_x, self.lever_y),
+                        (self.lever_track_x + self.lever_track_width, self.lever_y),
+                        int(8 * self.scale))
+
+        lever_center = self.lever_rect.center
+        left_pivot = (self.left_door_rect.right - int(10*self.scale), self.left_door_rect.bottom)
+        right_pivot = (self.right_door_rect.left + int(10*self.scale), self.right_door_rect.bottom)
+
+        pygame.draw.line(surface, (70, 70, 70), lever_center, left_pivot, int(6 * self.scale))
+        pygame.draw.line(surface, (70, 70, 70), lever_center, right_pivot, int(6 * self.scale))
+
+        pygame.draw.rect(surface, (30, 30, 30), self.lever_rect)
+        pygame.draw.rect(surface, (80, 80, 80), self.lever_rect, int(2 * self.scale))
+        pygame.draw.circle(surface, (20, 20, 20), left_pivot, int(4 * self.scale))
+        pygame.draw.circle(surface, (20, 20, 20), right_pivot, int(4 * self.scale))
+
+        # ------------------------------------------------------------
+        # 8. Stats & UI Text
+        # ------------------------------------------------------------
+        stats = [
+            f"Coal: {self.coal_mass:.0f} kg",
+            f"Fire Temp: {self.fire_temp:.1f}C",
+            f"Boiler Temp: {self.boiler_temp:.1f}C",
+            f"Efficiency: {int(self.current_efficiency * 100)}%",
+        ]
+        for i, text in enumerate(stats):
+            surface.blit(
+                self.font.render(text, True, (200, 200, 200)),
+                (self.box_rect.left + 10, self.box_rect.top - 80 + i * 25 * self.scale),
+            )
+
+        label_surf = self.font.render("Smoke colour indicates combustion completeness", True, (200, 200, 200))
+        surface.blit(label_surf, (self.box_rect.left + 10, self.box_rect.bottom + 10))
+
+        if self.smoke_colour is not None:
+            rect = pygame.Rect(self.box_rect.left + 10, self.box_rect.bottom + 35,
+                            int(40 * self.scale), int(20 * self.scale))
+            pygame.draw.rect(surface, self.smoke_colour, rect)
+
+        # ------------------------------------------------------------
+        # 9. Match Drawing
+        # ------------------------------------------------------------
+        if self.match_equipped:
+            mx, my = pygame.mouse.get_pos()
+            length, thick = 40 * self.scale, 6 * self.scale
+            pygame.draw.rect(surface, (230, 210, 170), (mx, my, length, thick))
+            pygame.draw.rect(surface, (200, 40, 40), (mx, my, thick, thick))
+
+        # ------------------------------------------------------------
+        # 10. Notifications
+        # ------------------------------------------------------------
+        stats_x = self.box_rect.left + 10
+        notif_x = stats_x + 120
+
+        for i, msg in enumerate(self.persistent_notifications):
+            surf = self.font.render(msg, True, (255, 255, 0))
+            surface.blit(surf, (notif_x, self.box_rect.top - 80 + i * 25))
+
+        if self.notification_timer > 0:
+            surf = self.font.render(self.notification_text, True, (255, 255, 0))
+            surface.blit(surf, (notif_x, self.box_rect.top - 30))
+
+        # ------------------------------------------------------------
+        # 11. Popup Window
+        # ------------------------------------------------------------
+        if self.popup_active:
+            pygame.draw.rect(surface, (20, 20, 20), self.popup_rect)
+            pygame.draw.rect(surface, (200, 0, 0), self.popup_close_rect)
+            txt = self.font.render("Start a small fire first using Paper + Kindling.", True, (255, 255, 255))
+            surface.blit(txt, (self.popup_rect.centerx - txt.get_width() // 2,
+                            self.popup_rect.centery - 10))
+            
+
+
+
+# --- Boiler Class --- #
+
+class Boiler:
+    def __init__(
+        self,
+        ambient_temp: float = 20.0,
+        water_mass: float = 1200.0,   # kg of water in boiler
+        metal_mass: float = 2500.0,   # kg of boiler metal
+    ) -> None:
+        # State
+        self.ambient_temp = ambient_temp
+        self.temperature = ambient_temp  # °C (bulk water/metal temp)
+        self.steam_mass = 0.0           # kg of steam in boiler
+        self.pressure = 0.0             # bar (simplified)
+
+        # Physical properties
+        self.water_mass = water_mass
+        self.metal_mass = metal_mass
+
+        self.c_water = 4.186            # kJ/kg°C
+        self.c_metal = 0.49             # kJ/kg°C
+        self.latent_heat = 2257.0       # kJ/kg (steam)
+
+        # Losses (tunable)
+        self.heat_loss_kW = 20.0        # kW lost to environment at working temp
+        self.pressure_per_kg = 0.08     # bar per kg steam (tunable)
+        self.boiling_point = 100.0      # °C (simplified)
+
+    @property
+    def thermal_capacity(self) -> float:
+        return self.water_mass * self.c_water + self.metal_mass * self.c_metal
+
+    def update(self, dt: float, heat_input_kW: float, steam_draw_kg_s: float = 0.0) -> None:
+        if dt <= 0:
+            return
+
+        # Convert kW to kJ over dt
+        Q_in = max(0.0, heat_input_kW) * dt  # kJ
+
+        # Heat loss to environment (simple constant kW)
+        Q_loss = self.heat_loss_kW * dt
+        Q_net = max(0.0, Q_in - Q_loss)
+
+        # 1) Heat the boiler metal + water up to boiling point
+        if self.temperature < self.boiling_point:
+            needed = (self.boiling_point - self.temperature) * self.thermal_capacity
+            dQ = min(Q_net, needed)
+            self.temperature += dQ / self.thermal_capacity
+            Q_net -= dQ
+
+        # 2) Any remaining heat makes steam
+        if self.temperature >= self.boiling_point and Q_net > 0.0:
+            self.steam_mass += Q_net / self.latent_heat
+            Q_net = 0.0
+
+        # 3) Steam usage (cylinders, injectors, etc.)
+        if steam_draw_kg_s > 0.0:
+            self.steam_mass = max(0.0, self.steam_mass - steam_draw_kg_s * dt)
+
+        # 4) Update pressure (very simplified)
+        self.pressure = self.steam_mass * self.pressure_per_kg
+
+        # Prevent boiler cooling below ambient
+        self.temperature = max(self.temperature, self.ambient_temp)
+
+
+# --- Screw Reverser Class --- #
+
+class ReverserWheel:
+    """
+    Reverser wheel control for the steam train.
+
+    - `current_rotation` is the logical rotation (degrees) used by game logic.
+    - `visual_rotation` is a separate state used only for drawing; it
+      smoothly interpolates toward `current_rotation` at a fixed rate
+      independent of steam pressure so the wheel always visibly animates
+      when the player scrolls it.
+    """
+
+    # Toggle detailed reverser debug logging
+    DEBUG_REVERSER = False
+
+    def __init__(self, x, y, scale=1.0):
+        self.x, self.y, self.scale = x, y, scale
+
+        self.max_turns = 5.0
+        self.max_rotation = self.max_turns * 360.0
+        self.current_rotation = 0.0
+
+        # Visual rotation used only for drawing (smooth interpolation).
+        self.visual_rotation = 0.0
+
+        # Cutoff (percent) derived from logical rotation
+        self.cutoff = 0.0
+
+        # Visual smoothing parameters
+        # degrees per second the visual rotation can move (independent of steam)
+        self._visual_smoothing_speed = 360.0
+        # Snap threshold (degrees) to avoid visible jitter for tiny deltas
+        self._snap_threshold = 0.25
+
+        self.recalculate_scale(self.x, self.y, self.scale)
+
+    def recalculate_scale(self, x, y, scale):
+        self.x, self.y, self.scale = x, y, scale
+        self.radius = 120 * self.scale
+        self.font = pygame.font.SysFont(None, max(12, int(24 * self.scale)))
+
+        self.wheel_rect = pygame.Rect(
+            self.x - self.radius,
+            self.y - self.radius,
+            self.radius * 2,
+            self.radius * 2,
+        )
+
+    def handle_event(self, event, steam_pressure):
+        """
+        Handle Pygame events that affect the reverser.
+
+        Logical update behavior is preserved: MOUSEWHEEL changes
+        `current_rotation` and the existing load factor calculation
+        (which depends on steam_pressure and cutoff) is kept intact.
+        Only clamping is applied here to keep the logical value in range.
+        """
+        if event.type == pygame.MOUSEWHEEL:
+            mouse_pos = pygame.mouse.get_pos()
+            if self.wheel_rect.collidepoint(mouse_pos):
+
+                # Preserve original logical update logic exactly (except for clamping)
+                base_turn = event.y * 45.0
+                load_factor = 1.0 + (steam_pressure * abs(self.cutoff / 75.0) * 0.015)
+                actual_turn = base_turn / load_factor
+
+                self.current_rotation += actual_turn
+                # Clamp logical rotation to allowed range (unchanged behavior)
+                self.current_rotation = max(
+                    -self.max_rotation, min(self.max_rotation, self.current_rotation)
+                )
+
+                if self.DEBUG_REVERSER:
+                    print(
+                        f"[REVERSER] MOUSEWHEEL y={event.y} base_turn={base_turn:.2f} "
+                        f"load_factor={load_factor:.4f} actual_turn={actual_turn:.4f} "
+                        f"current_rotation={self.current_rotation:.4f}"
+                    )
+
+    def update(self, dt, steam_pressure):
+        """
+        Update per-frame. This updates the logical cutoff (unchanged)
+        and advances `visual_rotation` toward `current_rotation` at a
+        fixed rate independent of steam_pressure so the wheel always
+        animates when the user scrolls it.
+
+        Args:
+            dt: seconds since last frame (float)
+            steam_pressure: kept for API compatibility (not used here)
+        """
+        # Update logical cutoff as before
+        self.cutoff = (self.current_rotation / self.max_rotation) * 75.0
+
+        # Smooth visual rotation toward logical rotation
+        diff = self.current_rotation - self.visual_rotation
+
+        # Snap tiny differences to zero to remove jitter
+        if abs(diff) <= self._snap_threshold:
+            if abs(diff) > 0.0 and self.DEBUG_REVERSER:
+                print(f"[REVERSER] Snapping visual_rotation by {diff:.4f} degrees")
+            self.visual_rotation = self.current_rotation
+            return
+
+        # Compute maximum allowed step this frame (degrees)
+        max_step = self._visual_smoothing_speed * float(dt)
+        # Clamp step to not overshoot
+        step = max(-max_step, min(max_step, diff))
+        self.visual_rotation += step
+
+        if self.DEBUG_REVERSER:
+            print(
+                f"[REVERSER] update dt={dt:.4f} diff={diff:.4f} step={step:.4f} "
+                f"visual_rotation={self.visual_rotation:.4f}"
+            )
+
+    def draw(self, surface):
+        """
+        Draw the reverser wheel using `visual_rotation` so animation is smooth.
+        """
+        pygame.draw.circle(surface, (40, 40, 40), (self.x, self.y), self.radius)
+        pygame.draw.circle(
+            surface,
+            (80, 80, 80),
+            (self.x, self.y),
+            self.radius,
+            max(1, int(10 * self.scale)),
+        )
+
+        # Use visual_rotation for drawing so the wheel visibly turns even
+        # when steam pressure is low.
+        for angle in range(0, 360, 45):
+            rad = math.radians(angle + self.visual_rotation)
+            end_x = self.x + math.cos(rad) * self.radius
+            end_y = self.y + math.sin(rad) * self.radius
+            pygame.draw.line(
+                surface,
+                (100, 100, 100),
+                (self.x, self.y),
+                (end_x, end_y),
+                max(1, int(6 * self.scale)),
+            )
+
+        slider_x = self.x - self.radius - (50 * self.scale)
+        slider_height = 150 * self.scale
+        slider_y_center = self.y
+
+        pygame.draw.rect(
+            surface,
+            (30, 30, 30),
+            (
+                slider_x - 10 * self.scale,
+                slider_y_center - slider_height / 2,
+                20 * self.scale,
+                slider_height,
+            ),
+        )
+
+        rod_y = slider_y_center - ((self.cutoff / 75.0) * (slider_height / 2))
+        pygame.draw.circle(
+            surface, (200, 200, 200), (slider_x, rod_y), max(1, int(8 * self.scale))
+        )
+
+        dir_text = (
+            "FORWARD"
+            if self.cutoff > 0
+            else "REVERSE"
+            if self.cutoff < 0
+            else "MID-GEAR"
+        )
+        stats = [
+            f"Cut-off: {abs(self.cutoff):.1f}% {dir_text}",
+            "(Scroll wheel to turn)",
+        ]
+
+        for i, text in enumerate(stats):
+            surface.blit(
+                self.font.render(text, True, (200, 200, 200)),
+                (self.x - self.radius, self.y + self.radius + 10 + (i * 25 * self.scale)),
+            )
+
+# --- Main Program ---
+pygame.init()
+screen = pygame.display.set_mode((1200, 700), pygame.RESIZABLE)
+clock = pygame.time.Clock()
+
+SD_anchor_x, SD_anchor_y = 0.2, 0.25 #Speed Dial Position
+FB_anchor_x, FB_anchor_y = 0.5, 0.7 #Firebox Position
+RV_anchor_x, RV_anchor_y = 0.2, 0.75 #Reverser Position
+BP_anchor_x, BP_anchor_y = 0.8, 0.25  #Boiler Pressure Gauge Position
+
+gauge = SpeedGauge(0, 0)
+firebox = Firebox(0, 0)
+reverser = ReverserWheel(0, 0)
+boiler_gauge = BoilerPressureGauge(0, 0)
+
+train_speed = 0.0
+train_mass = 50000.0
+
+running = True
+while running:
+    curr_w, curr_h = screen.get_size()
+    dt = clock.tick(60) / 1000.0
+
+    steam_pressure = firebox.boiler.pressure
+
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+        firebox.handle_event(event)
+        reverser.handle_event(event, steam_pressure)
+
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_c:
+            firebox.add_coal(5.0)
+
+    dyn_scale = (min(curr_w, curr_h) / 600) * 0.45
+    gauge.recalculate_scale(int(curr_w * SD_anchor_x), int(curr_h * SD_anchor_y), dyn_scale)
+    firebox.recalculate_scale(int(curr_w * FB_anchor_x), int(curr_h * FB_anchor_y), dyn_scale * 1.3)
+    reverser.recalculate_scale(int(curr_w * RV_anchor_x), int(curr_h * RV_anchor_y), dyn_scale * 1.1)
+    boiler_gauge.recalculate_scale(int(curr_w * BP_anchor_x), int(curr_h * BP_anchor_y), dyn_scale)
+
+    reverser.update(dt, steam_pressure)
+
+    cutoff_factor = reverser.cutoff / 100.0
+    raw_torque = steam_pressure * abs(cutoff_factor) * 50.0
+
+    steam_draw = raw_torque * (1.0 + abs(cutoff_factor)) * 1000.0 * dt
+
+    drag = train_speed * 0.5
+    acceleration = (raw_torque - drag) / (train_mass / 1000.0)
+
+    if cutoff_factor > 0:
+        train_speed += acceleration * dt
+    elif cutoff_factor < 0:
+        train_speed -= acceleration * dt
+    else:
+        train_speed -= drag * dt * 0.1
+
+    firebox.update(dt, steam_draw)
+    gauge.update(abs(train_speed))
+    boiler_gauge.update(steam_pressure)
+
+    screen.fill((50, 50, 55))
+    gauge.draw(screen)
+    firebox.draw(screen)
+    reverser.draw(screen)
+    boiler_gauge.draw(screen)
+
+    pygame.display.flip()
+
+pygame.quit()
