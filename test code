@@ -727,7 +727,7 @@ class Firebox:
         stats = [
             f"Coal: {self.coal_mass:.0f} kg",
             f"Fire Temp: {self.fire_temp:.1f}C",
-            f"Boiler Temp: {self.boiler_temp:.1f}C",
+            f"Boiler Temp: {self.boiler.temperature:.1f}C",
             f"Efficiency: {int(self.current_efficiency * 100)}%",
         ]
         for i, text in enumerate(stats):
