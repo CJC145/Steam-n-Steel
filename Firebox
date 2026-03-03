@@ -1,8 +1,3 @@
-# --- Firebox Class ---
-import pygame
-import math
-from typing import Optional, Tuple, List
-
 class Firebox:
     """
     Firebox model with:
@@ -27,8 +22,8 @@ class Firebox:
     # Combustion & heat transfer
     k_combustion = 500.0
     fire_heat_capacity = 2000.0
-    fire_cooling_rate = 5.0
-    k_heat_transfer = 50.0
+    fire_cooling_rate = 0.5
+    k_heat_transfer = 3.0
     boiler_water_heat_capacity = 4.18e6
 
     # Efficiency bounds
@@ -91,15 +86,9 @@ class Firebox:
         self.dragging_lever: bool = False
 
         # Coal
-        self.coal_mass: float = 0.0
+        self.coal_mass: float = 0.0 #kg of coal 
         self.fuel_amount: float = self.coal_mass
         self.burn_rate: float = 0.5
-
-        # Boiler
-        self.boiler_temp: float = float(self.AMBIENT_TEMP)
-        self.water_mass: float = 1000.0
-        self.specific_heat: float = 4186.0
-        self.heat_loss_rate: float = 3_000_000.0
 
         # Status
         self.current_efficiency: float = self.MIN_EFFICIENCY
@@ -113,6 +102,9 @@ class Firebox:
 
         # UI
         self.recalculate_scale(self.x, self.y, self.scale)
+
+        # Boiler
+        self.boiler = Boiler(ambient_temp=self.AMBIENT_TEMP)
 
     # ------------------------------------------------------------
     # UI layout & Geometry Updates
@@ -320,31 +312,40 @@ class Firebox:
             self.AIRFLOW_MIN_FACTOR,
             1.0 - overpack_norm * (1.0 - self.AIRFLOW_MIN_FACTOR),
         )
-
+    
     # ------------------------------------------------------------
     # Update
     # ------------------------------------------------------------
     def update(self, dt: float, steam_draw: float = 0.0) -> None:
-        if dt <= 0: return
+        if dt <= 0:
+            return
 
         if self.notification_timer > 0:
             self.notification_timer -= dt
 
         fire_lit = self.fire_temp >= self.IGNITION_TEMP or self.fire_state == "lit"
 
-        draft_factor = max(0.0, min(1.0, self.door_open_ratio))
-        draft_norm = draft_factor
+        # ---------------- Draft & size ----------------
+        d = max(0.0, min(1.0, self.door_open_ratio))
         size_norm = max(0.0, min(1.0, self.coal_mass / max(1.0, self.OPTIMAL_COAL)))
 
+        overpack_norm = self._compute_overpack_norm()
+        airflow_block_factor = self._compute_airflow_block_factor(overpack_norm)
+
+        # Size-dependent optimal door opening
+        optimal_shift = 0.2 + 0.6 * size_norm
+        draft_effectiveness = 1.0 - abs(d - optimal_shift) * 2.0
+        draft_effectiveness = max(0.0, draft_effectiveness)
+
+        effective_draft = draft_effectiveness * airflow_block_factor
+
+        # ---------------- Temperature term for efficiency ----------------
         if self.fire_temp >= self.IGNITION_TEMP:
             temp_norm = 1.0
         else:
             temp_norm = max(0.0, (self.fire_temp / self.IGNITION_TEMP) * 0.5)
 
-        overpack_norm = self._compute_overpack_norm()
-        airflow_block_factor = self._compute_airflow_block_factor(overpack_norm)
-        effective_draft = draft_norm * airflow_block_factor
-
+        # ---------------- Efficiency ----------------
         if fire_lit:
             composite = (
                 self.W_DRAFT * effective_draft
@@ -353,13 +354,14 @@ class Firebox:
             )
             composite = max(0.0, min(1.0, composite))
             efficiency = self.MIN_EFFICIENCY + composite * (self.MAX_EFFICIENCY - self.MIN_EFFICIENCY)
-            efficiency *= 1.0 - 0.5 * overpack_norm
+            efficiency *= (1.0 - 0.5 * overpack_norm)
             efficiency = max(self.MIN_EFFICIENCY, min(self.MAX_EFFICIENCY, efficiency))
         else:
             efficiency = self.MIN_EFFICIENCY
 
         self.current_efficiency = efficiency
 
+        # ---------------- Small fire (paper + kindling) ----------------
         small_fire_power = 0.0
         if self.fire_state in ("ready_to_light", "lit"):
             if self.paper_mass > 0:
@@ -369,15 +371,51 @@ class Firebox:
                 small_fire_power += self.KINDLING_POWER * (self.kindling_mass / self.KINDLING_INITIAL)
                 self.kindling_mass = max(0.0, self.kindling_mass - self.KINDLING_BURN_RATE * dt)
 
+        # ---------------- Main combustion power ----------------
         combustion_power = self.k_combustion * self.coal_mass * effective_draft * efficiency
-        total_power = combustion_power + small_fire_power
+        total_power_kW = combustion_power + small_fire_power  # treat as kW
 
-        self.fire_temp += (total_power * dt) / self.fire_heat_capacity
-        self.fire_temp -= self.fire_cooling_rate * dt
-        self.fire_temp = max(self.fire_temp, self.AMBIENT_TEMP)
+        # ---------------- Fire temperature (capped, realistic) ----------------
+        FIRE_MAX_TEMP = 1370.0  # °C
 
+        # Heat gain from combustion (kJ)
+        Q_fire_in = total_power_kW * dt
+        heat_gain = Q_fire_in / self.fire_heat_capacity
+
+        # Diminishing returns as we approach max temp
+        diminish = 1 / (1 + math.exp((self.fire_temp - 1100) / 150))
+        diminish = max(0.0, diminish)
+        heat_gain *= diminish
+
+        # Base cooling (radiation, leakage)
+        base_cooling = self.fire_cooling_rate * dt
+
+        # Apply base heating/cooling first
+        self.fire_temp += heat_gain
+        self.fire_temp -= base_cooling
+
+        # ---------------- Coupling to boiler ----------------
+        # Heat transferred from fire to boiler (kW)
+        # Only if fire is hotter than boiler
+        delta_T_fb = self.fire_temp - self.boiler.temperature
+        heat_to_boiler_kW = 0.0
+        if delta_T_fb > 0.0:
+            heat_to_boiler_kW = self.k_heat_transfer * delta_T_fb
+
+            # Remove that energy from the fire
+            Q_to_boiler_kJ = heat_to_boiler_kW * dt
+            self.fire_temp -= Q_to_boiler_kJ / self.fire_heat_capacity
+
+            # Give it to the boiler (steam_draw is kg/s)
+            self.boiler.update(dt, heat_to_boiler_kW, steam_draw_kg_s=steam_draw)
+
+        # Clamp fire temperature
+        self.fire_temp = max(self.AMBIENT_TEMP, min(self.fire_temp, FIRE_MAX_TEMP))
+
+        # Re-evaluate fire_lit after temp update
         fire_lit = self.fire_temp >= self.IGNITION_TEMP or self.fire_state == "lit"
 
+        # ---------------- Smoke model ----------------
         if fire_lit:
             complete = 0.0
             if self.MAX_EFFICIENCY > 0:
@@ -390,24 +428,24 @@ class Firebox:
 
         self.black_smoke = self.smoke_intensity > 0.7
 
+        # ---------------- Coal burn-down ----------------
         if self.coal_mass > 0:
             burned = min(self.coal_mass, self.burn_rate * dt)
             self.coal_mass -= burned
             self.fuel_amount = self.coal_mass
 
+        # ---------------- Fire state transitions ----------------
         if self.fire_state == "lit":
-            if (self.coal_mass <= 0 and self.paper_mass <= 0 and self.kindling_mass <= 0 
-                and self.fire_temp <= self.AMBIENT_TEMP + 0.5):
+            if (
+                self.coal_mass <= 0
+                and self.paper_mass <= 0
+                and self.kindling_mass <= 0
+                and self.fire_temp <= self.AMBIENT_TEMP + 0.5
+            ):
                 self.fire_state = "dead"
                 self.has_paper = False
                 self.has_kindling = False
-
-        heat_flux = max(0.0, self.k_heat_transfer * (self.fire_temp - self.boiler_temp))
-        energy_to_boiler = (heat_flux * dt) - (self.heat_loss_rate * dt) - steam_draw
-        self.boiler_temp += energy_to_boiler / (self.water_mass * self.specific_heat)
-        self.boiler_temp = max(self.boiler_temp, self.AMBIENT_TEMP)
-
-
+                
     # ------------------------------------------------------------
     # Draw
     # ------------------------------------------------------------
@@ -554,7 +592,7 @@ class Firebox:
         stats = [
             f"Coal: {self.coal_mass:.0f} kg",
             f"Fire Temp: {self.fire_temp:.1f}C",
-            f"Boiler Temp: {self.boiler_temp:.1f}C",
+            f"Boiler Temp: {self.boiler.temperature:.1f}C",
             f"Efficiency: {int(self.current_efficiency * 100)}%",
         ]
         for i, text in enumerate(stats):
@@ -604,3 +642,4 @@ class Firebox:
             surface.blit(txt, (self.popup_rect.centerx - txt.get_width() // 2,
                             self.popup_rect.centery - 10))
             
+
