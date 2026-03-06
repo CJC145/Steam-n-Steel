@@ -220,7 +220,7 @@ class Firebox:
         self.dragging_lever: bool = False
 
         # Coal
-        self.coal_mass: float = 0.0
+        self.coal_mass: float = 0.0 #kg of coal 
         self.fuel_amount: float = self.coal_mass
         self.burn_rate: float = 0.5
 
@@ -457,104 +457,91 @@ class Firebox:
         if self.notification_timer > 0:
             self.notification_timer -= dt
 
+        # Determine if fire is lit
         fire_lit = self.fire_temp >= self.IGNITION_TEMP or self.fire_state == "lit"
 
-        # ---------------- Draft & size ----------------
+        # -------------------- Draft & Airflow --------------------
         d = max(0.0, min(1.0, self.door_open_ratio))
         size_norm = max(0.0, min(1.0, self.coal_mass / max(1.0, self.OPTIMAL_COAL)))
-
         overpack_norm = self._compute_overpack_norm()
         airflow_block_factor = self._compute_airflow_block_factor(overpack_norm)
 
-        # Size-dependent optimal door opening
+        # Draft effectiveness based on door position
         optimal_shift = 0.2 + 0.6 * size_norm
         draft_effectiveness = 1.0 - abs(d - optimal_shift) * 2.0
         draft_effectiveness = max(0.0, draft_effectiveness)
-
         effective_draft = draft_effectiveness * airflow_block_factor
 
-        # ---------------- Temperature term for efficiency ----------------
-        if self.fire_temp >= self.IGNITION_TEMP:
-            temp_norm = 1.0
-        else:
-            temp_norm = max(0.0, (self.fire_temp / self.IGNITION_TEMP) * 0.5)
-
-        # ---------------- Efficiency ----------------
-        if fire_lit:
-            composite = (
-                self.W_DRAFT * effective_draft
-                + self.W_SIZE * size_norm
-                + self.W_TEMP * temp_norm
-            )
-            composite = max(0.0, min(1.0, composite))
-            efficiency = self.MIN_EFFICIENCY + composite * (self.MAX_EFFICIENCY - self.MIN_EFFICIENCY)
-            efficiency *= (1.0 - 0.5 * overpack_norm)
-            efficiency = max(self.MIN_EFFICIENCY, min(self.MAX_EFFICIENCY, efficiency))
-        else:
-            efficiency = self.MIN_EFFICIENCY
-
+        # -------------------- Combustion Efficiency --------------------
+        # Efficiency now depends only on draft & overpack, not temperature
+        efficiency = effective_draft * (1.0 - 0.5 * overpack_norm)
+        efficiency = max(self.MIN_EFFICIENCY, min(self.MAX_EFFICIENCY, efficiency))
         self.current_efficiency = efficiency
 
-        # ---------------- Small fire (paper + kindling) ----------------
+        # -------------------- Coal Burn Rate Scaling --------------------
+        # temperature scaling: weak fire burns slowly; hot fire burns quickly
+        temp_ratio = max(0.0, (self.fire_temp - self.AMBIENT_TEMP) / (self.IGNITION_TEMP))
+        temp_ratio = min(1.0, temp_ratio)
+        burn_rate_scaled = self.burn_rate * (0.2 + 0.8 * temp_ratio) * effective_draft
+
+        # Smothering: too much coal on weak fire chokes burn
+        smother_factor = 1.0
+        if temp_ratio < 0.25 and self.coal_mass > self.OPTIMAL_COAL * 0.5:
+            smother_factor = temp_ratio / 0.25
+
+        burn_rate_scaled *= smother_factor
+
+        # Actual burned coal this step
+        if fire_lit and self.coal_mass > 0:
+            burned = min(self.coal_mass, burn_rate_scaled * dt)
+        else:
+            burned = 0.0
+
+        self.coal_mass -= burned
+        self.fuel_amount = self.coal_mass
+
+        # -------------------- Heat from Combustion --------------------
+        # realistic coal energy ~ 25,000–28,000 kJ per kg
+        COAL_CALORIFIC_VALUE = 26000.0  # kJ/kg
+        q_combust_kj = burned * COAL_CALORIFIC_VALUE * efficiency
+        heat_gain = q_combust_kj / self.fire_heat_capacity
+
+        # -------------------- Small Fire Contributions --------------------
         small_fire_power = 0.0
         if self.fire_state in ("ready_to_light", "lit"):
             if self.paper_mass > 0:
-                small_fire_power += self.PAPER_POWER * (self.paper_mass / self.PAPER_INITIAL)
+                small_fire_power += self.PAPER_POWER
                 self.paper_mass = max(0.0, self.paper_mass - self.PAPER_BURN_RATE * dt)
             if self.kindling_mass > 0:
-                small_fire_power += self.KINDLING_POWER * (self.kindling_mass / self.KINDLING_INITIAL)
+                small_fire_power += self.KINDLING_POWER
                 self.kindling_mass = max(0.0, self.kindling_mass - self.KINDLING_BURN_RATE * dt)
 
-        # ---------------- Main combustion power ----------------
-        combustion_power = self.k_combustion * self.coal_mass * effective_draft * efficiency
-        total_power_kW = combustion_power + small_fire_power  # treat as kW
+        heat_gain += (small_fire_power * dt) / self.fire_heat_capacity
 
-        # ---------------- Fire temperature (capped, realistic) ----------------
-        FIRE_MAX_TEMP = 1370.0  # °C
-
-        # Heat gain from combustion (kJ)
-        Q_fire_in = total_power_kW * dt
-        heat_gain = Q_fire_in / self.fire_heat_capacity
-
-        # Diminishing returns as we approach max temp
-        diminish = 1 / (1 + math.exp((self.fire_temp - 1100) / 150))
-        diminish = max(0.0, diminish)
-        heat_gain *= diminish
-
-        # Base cooling (radiation, leakage)
-        base_cooling = self.fire_cooling_rate * dt
-
-        # Apply base heating/cooling first
+        # -------------------- Cooling --------------------
         self.fire_temp += heat_gain
-        self.fire_temp -= base_cooling
+        self.fire_temp -= self.fire_cooling_rate * dt
 
-        # ---------------- Coupling to boiler ----------------
-        # Heat transferred from fire to boiler (kW)
-        # Only if fire is hotter than boiler
+        # -------------------- Heat Transfer to Boiler --------------------
         delta_T_fb = self.fire_temp - self.boiler.temperature
         heat_to_boiler_kW = 0.0
         if delta_T_fb > 0.0:
             heat_to_boiler_kW = self.k_heat_transfer * delta_T_fb
 
-            # Remove that energy from the fire
-            Q_to_boiler_kJ = heat_to_boiler_kW * dt
-            self.fire_temp -= Q_to_boiler_kJ / self.fire_heat_capacity
+        q_to_boiler_kj = heat_to_boiler_kW * dt
+        self.fire_temp -= q_to_boiler_kj / self.fire_heat_capacity
 
-            # Give it to the boiler (steam_draw is kg/s)
-            self.boiler.update(dt, heat_to_boiler_kW, steam_draw_kg_s=steam_draw)
+        self.boiler.update(dt, heat_to_boiler_kW, steam_draw_kg_s=steam_draw)
 
-        # Clamp fire temperature
+        # -------------------- Clamp Temperature --------------------
+        FIRE_MAX_TEMP = 1370.0
         self.fire_temp = max(self.AMBIENT_TEMP, min(self.fire_temp, FIRE_MAX_TEMP))
 
-        # Re-evaluate fire_lit after temp update
-        fire_lit = self.fire_temp >= self.IGNITION_TEMP or self.fire_state == "lit"
-
-        # ---------------- Smoke model ----------------
+        # -------------------- Smoke --------------------
+        fire_lit = (self.fire_temp >= self.IGNITION_TEMP) or (self.fire_state == "lit")
         if fire_lit:
-            complete = 0.0
-            if self.MAX_EFFICIENCY > 0:
-                complete = max(0.0, min(1.0, self.current_efficiency / self.MAX_EFFICIENCY))
-            self.smoke_intensity = max(0.0, min(1.0, 1.0 - complete)) * self.SMOKE_SCALE
+            complete = efficiency
+            self.smoke_intensity = (1.0 - complete) * self.SMOKE_SCALE
             self.smoke_colour = self._lerp_color(self.DARK_GREY, self.LIGHT_GREY, complete)
         else:
             self.smoke_intensity = 0.0
@@ -562,19 +549,13 @@ class Firebox:
 
         self.black_smoke = self.smoke_intensity > 0.7
 
-        # ---------------- Coal burn-down ----------------
-        if self.coal_mass > 0:
-            burned = min(self.coal_mass, self.burn_rate * dt)
-            self.coal_mass -= burned
-            self.fuel_amount = self.coal_mass
-
-        # ---------------- Fire state transitions ----------------
+        # -------------------- Fire Death --------------------
         if self.fire_state == "lit":
             if (
-                self.coal_mass <= 0
-                and self.paper_mass <= 0
-                and self.kindling_mass <= 0
-                and self.fire_temp <= self.AMBIENT_TEMP + 0.5
+                self.coal_mass <= 0.0 and
+                self.paper_mass <= 0.0 and
+                self.kindling_mass <= 0.0 and
+                self.fire_temp <= self.AMBIENT_TEMP + 5.0
             ):
                 self.fire_state = "dead"
                 self.has_paper = False
@@ -778,72 +759,159 @@ class Firebox:
             
 
 
-
 # --- Boiler Class --- #
 
 class Boiler:
+
+    
+    # Steam Table (Saturated Steam)
+    # Saturation table: (Temperature °C, Pressure bar absolute)
+    SATURATION_TABLE = [
+        (100.0, 1.013),
+        (120.0, 1.99),
+        (134.0, 3.0),
+        (152.0, 5.0),
+        (170.0, 8.0),
+        (184.0, 10.0),
+        (200.0, 15.0),
+        ]
+
     def __init__(
         self,
         ambient_temp: float = 20.0,
-        water_mass: float = 1200.0,   # kg of water in boiler
-        metal_mass: float = 2500.0,   # kg of boiler metal
+        water_mass: float = 1200.0,
+        metal_mass: float = 2500.0,
     ) -> None:
+
+
         # State
         self.ambient_temp = ambient_temp
-        self.temperature = ambient_temp  # °C (bulk water/metal temp)
-        self.steam_mass = 0.0           # kg of steam in boiler
-        self.pressure = 0.0             # bar (simplified)
+        self.temperature = ambient_temp
+        self.steam_mass = 0.0
+        self.pressure = 0.0
+
+        # Injector
+        self.injector_rate = 6.0  # kg/sec
+        self.injector_on = False
 
         # Physical properties
         self.water_mass = water_mass
         self.metal_mass = metal_mass
 
-        self.c_water = 4.186            # kJ/kg°C
-        self.c_metal = 0.49             # kJ/kg°C
-        self.latent_heat = 2257.0       # kJ/kg (steam)
+        self.c_water = 4.186        # kJ/kg°C
+        self.c_metal = 0.49         # kJ/kg°C
+        self.latent_heat = 2257.0   # kJ/kg
 
-        # Losses (tunable)
-        self.heat_loss_kW = 20.0        # kW lost to environment at working temp
-        self.pressure_per_kg = 0.08     # bar per kg steam (tunable)
-        self.boiling_point = 150.0      # °C (simplified)
+        # Losses
+        self.heat_loss_kW = 20.0
+
+        self.total_volume = 6.0        # m³ (adjust later if needed)
+
+        self.R = 8.314                 # J/mol K
+        self.M_STEAM = 0.018015        # kg/mol
+
+
+    def _interp_pressure_from_temp(self, temp_c: float) -> float:
+        table = self.SATURATION_TABLE
+
+        for i in range(len(table) - 1):
+            t1, p1 = table[i]
+            t2, p2 = table[i + 1]
+
+            if t1 <= temp_c <= t2:
+                ratio = (temp_c - t1) / (t2 - t1)
+                return p1 + ratio * (p2 - p1)
+
+        return table[-1][1]
+
+
+    def _interp_temp_from_pressure(self, pressure_bar_abs: float) -> float:
+        table = self.SATURATION_TABLE
+
+        for i in range(len(table) - 1):
+            t1, p1 = table[i]
+            t2, p2 = table[i + 1]
+
+            if p1 <= pressure_bar_abs <= p2:
+                ratio = (pressure_bar_abs - p1) / (p2 - p1)
+                return t1 + ratio * (t2 - t1)
+
+        return table[-1][0]
 
     @property
     def thermal_capacity(self) -> float:
         return self.water_mass * self.c_water + self.metal_mass * self.c_metal
+    
+    def inject_water(self, tank, dt):
 
-    def update(self, dt: float, heat_input_kW: float, steam_draw_kg_s: float = 0.0) -> None:
-        if dt <= 0:
+        if not self.injector_on:
             return
 
-        # Convert kW to kJ over dt
-        Q_in = max(0.0, heat_input_kW) * dt  # kJ
+        water_needed = self.injector_rate * dt
 
-        # Heat loss to environment (simple constant kW)
-        Q_loss = self.heat_loss_kW * dt
-        Q_net = max(0.0, Q_in - Q_loss)
+        water_added = tank.remove_water(water_needed)
 
-        # 1) Heat the boiler metal + water up to boiling point
-        if self.temperature < self.boiling_point:
-            needed = (self.boiling_point - self.temperature) * self.thermal_capacity
-            dQ = min(Q_net, needed)
-            self.temperature += dQ / self.thermal_capacity
-            Q_net -= dQ
+        self.water_mass += water_added
 
-        # 2) Any remaining heat makes steam
-        if self.temperature >= self.boiling_point and Q_net > 0.0:
-            self.steam_mass += Q_net / self.latent_heat
-            Q_net = 0.0
+        # injector slightly cools the boiler
+        cooling = water_added * 4.186 * (self.temperature - 20)
+        self.temperature -= cooling / (
+            (self.water_mass * self.c_water) +
+            (self.metal_mass * self.c_metal)
+        )
 
-        # 3) Steam usage (cylinders, injectors, etc.)
-        if steam_draw_kg_s > 0.0:
-            self.steam_mass = max(0.0, self.steam_mass - steam_draw_kg_s * dt)
+    # ---------------------------------------
+    # Update
+    # ---------------------------------------
 
-        # 4) Update pressure (very simplified)
-        self.pressure = self.steam_mass * self.pressure_per_kg
+    def update(self, dt, heat_input_kW, steam_draw_kg_s):
 
-        # Prevent boiler cooling below ambient
-        self.temperature = max(self.temperature, self.ambient_temp)
+        # Convert heat input to kJ
+        heat_input_kJ = heat_input_kW * dt
 
+        # Heat loss to environment
+        heat_input_kJ -= self.heat_loss_kW * dt
+
+        if heat_input_kJ < 0:
+            heat_input_kJ = 0
+
+        # Total heat capacity of water + boiler metal
+        total_heat_capacity = (
+            self.water_mass * self.c_water +
+            self.metal_mass * self.c_metal
+        )
+
+        # ---------------- HEATING REGION ----------------
+        if self.temperature < 100.0:
+
+            dT = heat_input_kJ / total_heat_capacity
+            self.temperature += dT
+            return
+
+
+        # ---------------- SATURATED REGION ----------------
+
+        # Convert heat to steam
+        steam_generated = heat_input_kJ / self.latent_heat
+
+        steam_generated = min(steam_generated, self.water_mass)
+
+        # Remove water and add steam
+        self.water_mass -= steam_generated
+        self.steam_mass += steam_generated
+
+
+        # ---------------- STEAM USAGE ----------------
+
+        steam_used = steam_draw_kg_s * dt
+        steam_used = min(steam_used, self.steam_mass)
+
+        self.steam_mass -= steam_used
+
+
+        # ---------------- PRESSURE FROM SATURATION TABLE ----------------
+
+        self.pressure = self._interp_pressure_from_temp(self.temperature)
 
 # --- Screw Reverser Class --- #
 
@@ -1026,6 +1094,34 @@ class ReverserWheel:
                 (self.x - self.radius, self.y + self.radius + 10 + (i * 25 * self.scale)),
             )
 
+# Water Tank Class ---------------------------------
+
+class WaterTank:
+    def __init__(self, capacity_kg: float = 8000.0):
+
+        self.capacity = capacity_kg
+        self.water_mass = capacity_kg
+
+        # float indicator limits (numbers on the plate)
+        self.gauge_min = 0
+        self.gauge_max = 20
+
+    def remove_water(self, amount: float) -> float:
+        removed = min(amount, self.water_mass)
+        self.water_mass -= removed
+        return removed
+
+    def add_water(self, amount: float):
+
+        self.water_mass = min(self.capacity, self.water_mass + amount)
+
+    def get_level_fraction(self) -> float:
+        return self.water_mass / self.capacity
+
+    def get_float_gauge_value(self) -> float:
+        level = self.get_level_fraction()
+        return self.gauge_min + level * (self.gauge_max - self.gauge_min)
+
 # --- Main Program ---
 pygame.init()
 screen = pygame.display.set_mode((1200, 700), pygame.RESIZABLE)
@@ -1096,4 +1192,4 @@ while running:
 
     pygame.display.flip()
 
-pygame.quit()# add code here
+pygame.quit()
